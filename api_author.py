@@ -41,24 +41,24 @@ def run_sparql_query(orcid: str):
         SELECT DISTINCT
           ?dataset ?author ?author_label ?orcid ?title ?contact_person ?license
         WHERE {{
-          ?author     rdf:type     pro:Author .
-          ?author     owl:sameAS   ?orcid .
-          ?author     rdfs:label   ?author_label .
-          ?dataset     a dcat:Dataset .
-          ?dataset    dct:creator          ?author .
-          ?dataset    dct:title            ?title .
-          #?dataset    dcat:contactPoint    ?contact_person .
-          #?dataset    dct:license          ?license .
+          ?author     rdf:type       pro:Author .
+          ?author     owl:sameAS     ?orcid .
+          ?author     rdfs:label     ?author_label .
+          ?dataset    a              dcat:Dataset .
+          ?dataset    dct:creator    ?author .
+          ?dataset    dct:title      ?title .
+          ?dataset    dcat:contactPoint    ?contact_person .
+           optional {{ ?dataset dct:license ?license }}
           FILTER (CONTAINS(STR(?author), "{author_id}"))
         }}
         """
 
-        print(dataset_query)
+        # print(dataset_query)
 
         sparql.setQuery(dataset_query)
         sparql.setReturnFormat(JSON)
 
-        print(sparql.query().convert())
+        return(sparql.query().convert()["results"]["bindings"])
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
@@ -75,7 +75,7 @@ async def get_paper_info_by_orcid(orcid: str = Query(..., description="return pa
     if not data:
         raise HTTPException(status_code=404, detail="No dataset found with that DOI.")
 
-    return {"doi": doi, "results": data}
+    return {"orcid": orcid, "results": data}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5002)
