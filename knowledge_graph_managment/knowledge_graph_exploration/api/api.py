@@ -34,12 +34,9 @@ def get_dataset_attributes_by_paper_doi_helper(input_paper_doi: str):
         ?dataset dct:creator ?author .
         ?author rdfs:label ?author_label
       }} .
-      optional {{?dataset dct:title ?title}} .
-      optional {{
-        ?dataset dcat:contactPoint ?tmp_node .
-        ?tmp_node vcard:fn ?contact_point
-      }} .
-      optional {{?dataset dct:license ?license}} .
+      optional {{ ?dataset dct:title ?title }} .
+      optional {{ ?dataset vcard:fn ?contact_person }} .
+      optional {{ ?dataset dct:license ?license }} .
     }}
     """
 
@@ -78,12 +75,9 @@ def get_dataset_attributes_by_several_paper_doi_helper(input_paper_doi_list: Lis
         ?dataset dct:creator ?author .
         ?author rdfs:label ?author_label
       }} .
-      optional {{?dataset dct:title ?title}} .
-      optional {{
-        ?dataset dcat:contactPoint ?tmp_node .
-        ?tmp_node vcard:fn ?contact_point
-      }} .
-      optional {{?dataset dct:license ?license}} .
+      optional {{ ?dataset dct:title ?title }} .
+      optional {{ ?dataset ?contact_person }} .
+      optional {{ ?dataset dct:license ?license }} .
     }}
     """
 
@@ -140,10 +134,7 @@ def get_dataset_attributes_by_author_orcid_helper(orcid: str):
           ?dataset    rdf:type             dcat:Dataset .
           ?dataset    dct:creator          ?author .
           ?dataset    dct:title            ?title .
-          optional {{
-            ?dataset dcat:contactPoint ?tmp_node .
-            ?tmp_node vcard:fn ?contact_point
-          }} .
+          optional {{ ?dataset vcard:fn ?contact_person }} .
           optional {{ ?dataset dct:license ?license }} .
         }}
         """
