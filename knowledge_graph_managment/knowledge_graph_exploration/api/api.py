@@ -22,6 +22,7 @@ def get_dataset_attributes_by_paper_doi_helper(input_paper_doi: str):
     PREFIX dcat:     <http://www.w3.org/ns/dcat#>
     PREFIX dct:      <http://purl.org/dc/terms/>
     PREFIX datacite: <http://purl.org/spar/datacite/>
+    PREFIX vcard:    <http://www.w3.org/2006/vcard/ns#>
 
     SELECT DISTINCT
       ?dataset ?doi ?author ?author_label ?title ?contact_person ?license
@@ -29,15 +30,20 @@ def get_dataset_attributes_by_paper_doi_helper(input_paper_doi: str):
       bind (<{input_paper_doi}> as ?doi)
       ?dataset    a                         dcat:Dataset .
       ?dataset    datacite:isDescribedBy    ?doi .
-      optional {{?dataset dct:creator ?author}} .
+      optional {{
+        ?dataset dct:creator ?author .
+        ?author rdfs:label ?author_label
+      }} .
       optional {{?dataset dct:title ?title}} .
-      optional {{?dataset dcat:contactPoint ?contact_person}} .
+      optional {{
+        ?dataset dcat:contactPoint ?tmp_node .
+        ?tmp_node vcard:fn ?contact_point
+      }} .
       optional {{?dataset dct:license ?license}} .
-      optional {{?author rdfs:label ?author_label}} .
     }}
     """
 
-    # print(query)
+    print(query)
 
     sparql.setQuery(query)
     sparql.setReturnFormat(JSON)
@@ -60,6 +66,7 @@ def get_dataset_attributes_by_several_paper_doi_helper(input_paper_doi_list: Lis
     PREFIX dcat: <http://www.w3.org/ns/dcat#>
     PREFIX dct: <http://purl.org/dc/terms/>
     PREFIX datacite: <http://purl.org/spar/datacite/>
+    PREFIX vcard:    <http://www.w3.org/2006/vcard/ns#>
 
     SELECT DISTINCT
       ?dataset ?doi ?author ?author_label ?title ?contact_person ?license
@@ -67,11 +74,16 @@ def get_dataset_attributes_by_several_paper_doi_helper(input_paper_doi_list: Lis
       VALUES ?doi {{ {formatted_dois} }}
       ?dataset    a                         dcat:Dataset .
       ?dataset    datacite:isDescribedBy    ?doi .
-      optional {{?dataset dct:creator ?author}} .
+     optional {{
+        ?dataset dct:creator ?author .
+        ?author rdfs:label ?author_label
+      }} .
       optional {{?dataset dct:title ?title}} .
-      optional {{?dataset dcat:contactPoint ?contact_person}} .
+      optional {{
+        ?dataset dcat:contactPoint ?tmp_node .
+        ?tmp_node vcard:fn ?contact_point
+      }} .
       optional {{?dataset dct:license ?license}} .
-      optional {{?author rdfs:label ?author_label}} .
     }}
     """
 
@@ -128,7 +140,10 @@ def get_dataset_attributes_by_author_orcid_helper(orcid: str):
           ?dataset    rdf:type             dcat:Dataset .
           ?dataset    dct:creator          ?author .
           ?dataset    dct:title            ?title .
-          optional {{ ?dataset dcat:contactPoint ?contact_person }} .
+          optional {{
+            ?dataset dcat:contactPoint ?tmp_node .
+            ?tmp_node vcard:fn ?contact_point
+          }} .
           optional {{ ?dataset dct:license ?license }} .
         }}
         """
