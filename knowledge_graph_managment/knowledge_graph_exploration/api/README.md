@@ -4,7 +4,7 @@ The API is used to gain information about the information present in the knowled
 
 # Description
 
-This API is a python script that can be run locally after installing the requirements. The default URL for the API is http://0.0.0.0:5000. The API returns information about the datasets in correlation with a paper or a authors ORCID.
+The API returns information about datasets associated with a paper or an author's ORCID. When requesting information about a paper, the DOI can be provided as input. If the DOI exists in the Leibniz Data Manager, the API returns the corresponding dataset metadata. Alternatively, an author's ORCID can be provided, in which case the API returns the metadata of the datasets associated with that author.
 
 # install requirements
 ```bash
