@@ -4,7 +4,7 @@ The API presented here contain the route for the integration of datasets
 
 # Description
 
-This API is a Flask service that maps dataset metadata properties to those defined in a mapping template. The API allows users to submit their own mapping template file to link existing metadata properties to the template and generate a corresponding output file in a specified output folder. The purpose of this service is to map dataset metadata to the structure required by the dataset template of the Leibniz Data Manager (LDM), facilitating easier import of datasets into the platform.
+This API is a service that maps dataset metadata properties to those defined in a mapping template. The API allows users to submit their own mapping template file to link existing metadata properties to the template and generate a corresponding output file in a specified output folder. The purpose of this service is to map dataset metadata to the structure required by the dataset template of the Leibniz Data Manager (LDM), facilitating easier import of datasets into the platform.
 
 ## routes
 

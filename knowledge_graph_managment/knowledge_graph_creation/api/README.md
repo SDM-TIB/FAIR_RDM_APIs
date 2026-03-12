@@ -4,7 +4,7 @@ The API presented here contain route for the creation of a knowledge graph
 
 # Description
 
-This API is a Flask service that transforms heterogeneous data sources into RDF knowledge graphs using SDM-RDFizer executed with RML mappings. The API allows users to submit datasets and RML mapping rules, automatically execute the transformation process, and output the resulting knowledge graph to a specified output folder.
+This API is a service that transforms heterogeneous data sources into RDF knowledge graphs using SDM-RDFizer executed with RML mappings. The API allows users to submit datasets and RML mapping rules, automatically execute the transformation process, and output the resulting knowledge graph to a specified output folder.
 
 ## routes
 
