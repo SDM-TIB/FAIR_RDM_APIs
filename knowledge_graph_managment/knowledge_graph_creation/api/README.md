@@ -6,11 +6,15 @@ The API presented here contain route for the creation of a knowledge graph
 
 This API is a service that transforms heterogeneous data sources into RDF knowledge graphs using SDM-RDFizer executed with RML mappings. The API allows users to submit datasets and RML mapping rules, automatically execute the transformation process, and output the resulting knowledge graph to a specified output folder.
 
+# RML Mapping.
+
+RDF Mapping Language (RML) is a declarative language used to define how heterogeneous data sources, such as CSV, JSON, XML, or relational databases, can be transformed into RDF triples. Using RML mappings, users specify how data elements from a source correspond to RDF subjects, predicates, and objects, enabling the automated generation of RDF knowledge graphs. Each RML has one subjectMap (which defines the entity's identifier) and zero or more predicateObjectMapps (which defines the properties and their corresponding values). [RML](https://rml.io/specs/rml/) has an specificcation page that describes all the properties of RML in more detail.
+
 ## routes
 
 kg_creation [POST]
 
-# Integration dataset metadata into a set template.
+# Creation of a Knowledge Graph.
 ## Example of Input Mapping
 ```
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
