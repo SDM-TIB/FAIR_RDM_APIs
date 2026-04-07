@@ -2,6 +2,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from SPARQLWrapper import SPARQLWrapper, JSON, POST
 
