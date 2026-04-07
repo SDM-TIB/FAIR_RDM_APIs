@@ -6,6 +6,10 @@ The API presented here contain the route for the integration of datasets
 
 This API is a service that maps dataset metadata properties to those defined in a mapping template. The API allows users to submit their own mapping template file to link existing metadata properties to the template and generate a corresponding output file in a specified output folder. The purpose of this service is to map dataset metadata to the structure required by the dataset template of the Leibniz Data Manager (LDM), facilitating easier import of datasets into the platform.
 
+# Mapping Template
+
+The Mapping Template is a declarative mapping language that associates the metadata properties of a dataset with the dataset template defined in an instance of the Leibniz Data Manager. The template is divided into two sections. The first section (i.e., properties) maps the dataset’s metadata properties to their corresponding properties in the LDM template. The second section (i.e., resources) links the properties associated with resources related to the dataset. Both sections require an iterator that specifies the level of the metadata structure where the properties to be mapped are located.
+
 ## routes
 
 integration [POST]
