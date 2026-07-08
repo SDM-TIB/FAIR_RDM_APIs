@@ -10,7 +10,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Knowledge Graph Exploration API")
-ENDPOINT = "https://labs.tib.eu/sdm/ldm_kg/sparql"
+#ENDPOINT = "https://labs.tib.eu/sdm/ldm_kg/sparql"
+ENDPOINT = "http://127.0.0.1:8890/sparql/"
+
 
 # development rule remove_me
 app.add_middleware(
@@ -118,7 +120,7 @@ def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict, gl
     }
     if p_val not in mapping:
         return
-    
+
     local_key, global_key = mapping[p_val]
     local_sets[ds_uri][local_key].add(o_val)
     if global_key:
@@ -254,7 +256,7 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
               "publisher_set": set()}
         for uri in dataset_uris
     }
-    
+
     global_sets = {"creator": set(), "distribution": set(), "keyword": set(), "publisher": set()}
 
     for row in main_query_result:
@@ -459,7 +461,7 @@ def get_dataset_information_by_several_author_ldm_id_helper(author_ldm_ids: List
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        
+
         author_uris, dataset_uris, same_as_uris = _parse_author_results(results)
         final_results = {}
 
@@ -494,7 +496,7 @@ def get_dataset_information_by_several_paper_doi_helper(paper_dois: List[str]):
     sparql = get_sparql_client()
     clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in paper_dois]
     values_str = " ".join([f"<{doi}>" for doi in clean_dois])
-    
+
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
@@ -517,10 +519,10 @@ def get_dataset_information_by_several_paper_doi_helper(paper_dois: List[str]):
 def get_dataset_information_by_several_paper_title_helper(paper_titles: List[str]):
     if not paper_titles:
         return {}
-    
+
     sparql = get_sparql_client()
     values_str = " ".join([f'"{title}"' for title in paper_titles])
-    
+
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
@@ -548,7 +550,7 @@ def get_dataset_information_by_several_dataset_doi_helper(dataset_dois: List[str
     sparql = get_sparql_client()
     clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in dataset_dois]
     values_str = " ".join([f"<{doi}>" for doi in clean_dois])
-    
+
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
@@ -573,7 +575,7 @@ def get_dataset_information_by_several_dataset_title_helper(dataset_titles: List
         return {}
     sparql = get_sparql_client()
     values_str = " ".join([f'"{title}"' for title in dataset_titles])
-    
+
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
@@ -632,17 +634,27 @@ async def get_dataset_information_by_several_author_orcid(request: AuthorOrcidRe
 
 # --- AUTHOR NAME ENDPOINTS ---
 
+# --- AUTHOR NAME ENDPOINTS ---
+
 @app.get("/get_dataset_information_by_author_name")
 async def get_dataset_information_by_author_name(author_name: str = Query(...)):
     try:
-        data = get_dataset_information_by_author_name_helper(author_name)
+        # 1. Split the incoming string by commas and clean up extra whitespace
+        name_list = [name.strip() for name in author_name.split(",") if name.strip()]
+
+        # 2. Feed the list directly into your existing bulk helper!
+        data = get_dataset_information_by_several_author_name_helper(name_list)
+
         if not data:
-            raise HTTPException(status_code=404, detail="No datasets found for this name.")
+            raise HTTPException(status_code=404, detail="No datasets found for these names.")
+
+        # Return the data. We reflect the original string, but return the combined results
         return {"author_name": author_name, "results": data}
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching by Author name: {author_name}", exc_info=True)
+        logger.error(f"Error fetching by Author name(s): {author_name}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_author_name")
@@ -853,4 +865,3 @@ async def favicon():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5742)
-    
