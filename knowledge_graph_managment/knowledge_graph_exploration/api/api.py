@@ -634,8 +634,6 @@ async def get_dataset_information_by_several_author_orcid(request: AuthorOrcidRe
 
 # --- AUTHOR NAME ENDPOINTS ---
 
-# --- AUTHOR NAME ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_author_name")
 async def get_dataset_information_by_author_name(author_name: str = Query(...)):
     try:
