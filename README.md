@@ -14,6 +14,6 @@ git submodule update --init --recursive
 
 ## additional Documentation:
 - [data_comparison](data_comparison/README.md)
-- [knowledge_graph_creation](knowledge_graph_managment/knowledge_graph_creation/README.md)
-- [knowledge_graph_exploration](knowledge_graph_managment/knowledge_graph_exploration/README.md)
-- [knowledge_graph_integration](knowledge_graph_managment/knowledge_graph_integration/README.md)
+- [knowledge_graph_creation](knowledge_graph_managment/knowledge_graph_creation/api/README.md)
+- [knowledge_graph_exploration](knowledge_graph_managment/knowledge_graph_exploration/api/README.md)
+- [knowledge_graph_integration](knowledge_graph_managment/knowledge_graph_integration/api/README.md)
