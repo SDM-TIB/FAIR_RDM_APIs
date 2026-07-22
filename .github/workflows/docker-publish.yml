@@ -1,0 +1,67 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [main]
+
+env:
+  SERVICE_PATHS: |
+    {
+      "fair_rdm_kg_exploration": "knowledge_graph_managment/knowledge_graph_exploration/api"
+    }
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            fair_rdm_kg_exploration:
+              - 'knowledge_graph_managment/knowledge_graph_exploration/api/**'
+      - name: Build matrix
+        id: set-matrix
+        run: |
+          echo '${{ steps.filter.outputs.changes }}' > changed.json
+          echo "$SERVICE_PATHS" > paths.json
+          services=$(jq -c -s '.[0] as $changed | .[1] as $paths |
+            [$changed[] | {name: ., path: $paths[.]}]' changed.json paths.json)
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+  build-and-push:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./${{ matrix.service.path }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.service.name }}:latest
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.service.name }}:${{ steps.vars.outputs.sha_short }}
+
