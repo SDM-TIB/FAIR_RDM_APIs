@@ -15,7 +15,6 @@ app = FastAPI(title="Knowledge Graph Exploration API")
 ENDPOINT = "http://ldm_kg:8890/sparql"
 
 
-# development rule remove_me
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
