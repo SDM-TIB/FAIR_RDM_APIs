@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Knowledge Graph Exploration API")
 #ENDPOINT = "https://labs.tib.eu/sdm/ldm_kg/sparql"
-ENDPOINT = "http://127.0.0.1:8890/sparql/"
+#ENDPOINT = "http://127.0.0.1:8890/sparql/"
+ENDPOINT = "http://ldm_kg:8890/sparql"
 
 
 # development rule remove_me
