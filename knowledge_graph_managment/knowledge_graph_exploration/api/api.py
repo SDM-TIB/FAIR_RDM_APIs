@@ -1,5 +1,6 @@
 import logging
 import uvicorn
+import os
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,10 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Knowledge Graph Exploration API")
-#ENDPOINT = "https://labs.tib.eu/sdm/ldm_kg/sparql"
-#ENDPOINT = "http://127.0.0.1:8890/sparql/"
-ENDPOINT = "http://ldm_kg:8890/sparql"
-
+ENDPOINT = os.environ['CKANEXT__KG_EXPLORATION__ENDPOINT']
 
 app.add_middleware(
     CORSMiddleware,
