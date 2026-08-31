@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Tuple
 from SPARQLWrapper import SPARQLWrapper, JSON, POST
+from rdflib import Literal
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,8 +91,8 @@ class DatasetTitleRequest(BaseModel):
 class DatasetLdmIdRequest(BaseModel):
     dataset_ldm_ids: List[str]
 
-
-# --- FLATTENING HELPERS ---
+class KeywordRequest(BaseModel):
+    keywords: List[str]
 
 def _parse_o_node(o_node: dict) -> dict:
     inner_data = {"type": o_node['type'], "value": o_node['value']}
@@ -301,7 +302,7 @@ def translate_names_to_ldm_ids(author_names: List[str]) -> List[str]:
         return []
 
     sparql = get_sparql_client()
-    values_str = " ".join([f'"{name}"' for name in author_names])
+    values_str = " ".join([Literal(name).n3() for name in author_names])
 
     query = f"""
     PREFIX pro: <http://purl.org/spar/pro/>
@@ -352,15 +353,16 @@ def get_dataset_information_by_paper_doi_helper(paper_doi: str):
         logger.error("SPARQL Query Failed in several Dataset DOI helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Fetches Dataset using the local orgk:Paper Node and Title
+
 def get_dataset_information_by_paper_title_helper(paper_title: str):
     sparql = get_sparql_client()
+    safe_title = Literal(paper_title).n3()
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
     WHERE {{
         ?paper a orgk:Paper .
-        ?paper rdfs:label "{paper_title}" .
+        ?paper rdfs:label {safe_title} .
         ?dataset a dcat:Dataset .
         ?dataset datacite:isDescribedBy ?paper .
     }}
@@ -396,13 +398,14 @@ def get_dataset_information_by_dataset_doi_helper(dataset_doi: str):
 
 def get_dataset_information_by_dataset_title_helper(dataset_title: str):
     sparql = get_sparql_client()
+    safe_title = Literal(dataset_title).n3()
     query = f"""
     PREFIX dcat: <http://www.w3.org/ns/dcat#>
     PREFIX dct:  <http://purl.org/dc/terms/>
     SELECT DISTINCT ?dataset
     WHERE {{
         ?dataset a dcat:Dataset .
-        ?dataset dct:title "{dataset_title}" .
+        ?dataset dct:title {safe_title} .
     }}
     """
     try:
@@ -487,7 +490,6 @@ def get_dataset_information_by_several_author_ldm_id_helper(author_ldm_ids: List
         logger.error("SPARQL Query Failed in author LDM ID helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Returns Bulk Dataset Info using several Paper DOIs
 def get_dataset_information_by_several_paper_doi_helper(paper_dois: List[str]):
     if not paper_dois:
         return {}
@@ -513,13 +515,12 @@ def get_dataset_information_by_several_paper_doi_helper(paper_dois: List[str]):
         logger.error("SPARQL Query Failed in Paper DOI helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Returns Bulk Dataset Info using several Paper Titles (Local Graph Implementation)
 def get_dataset_information_by_several_paper_title_helper(paper_titles: List[str]):
     if not paper_titles:
         return {}
 
     sparql = get_sparql_client()
-    values_str = " ".join([f'"{title}"' for title in paper_titles])
+    values_str = " ".join([Literal(title).n3() for title in paper_titles])
 
     query = f"""
     {prefixes}
@@ -541,7 +542,6 @@ def get_dataset_information_by_several_paper_title_helper(paper_titles: List[str
         logger.error("SPARQL Query Failed in several Paper Title helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Returns Bulk Dataset Info using several Dataset DOIs
 def get_dataset_information_by_several_dataset_doi_helper(dataset_dois: List[str]):
     if not dataset_dois:
         return {}
@@ -567,12 +567,11 @@ def get_dataset_information_by_several_dataset_doi_helper(dataset_dois: List[str
         logger.error("SPARQL Query Failed in Dataset DOI helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Returns Bulk Dataset Info using several Dataset Titles
 def get_dataset_information_by_several_dataset_title_helper(dataset_titles: List[str]):
     if not dataset_titles:
         return {}
     sparql = get_sparql_client()
-    values_str = " ".join([f'"{title}"' for title in dataset_titles])
+    values_str = " ".join([Literal(title).n3() for title in dataset_titles])
 
     query = f"""
     {prefixes}
@@ -592,14 +591,43 @@ def get_dataset_information_by_several_dataset_title_helper(dataset_titles: List
         logger.error("SPARQL Query Failed in Dataset Title helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-# UPDATED: Directly calls bulk helper for LDM IDs
 def get_dataset_information_by_several_dataset_ldm_id_helper(dataset_ldm_ids: List[str]):
     if not dataset_ldm_ids:
         return {}
     return get_bulk_dataset_information_helper(dataset_ldm_ids)
 
+def get_dataset_information_by_several_keyword_helper(keywords: List[str]):
+    if not keywords:
+        return {}
 
-# --- AUTHOR ORCID ENDPOINTS ---
+    sparql = get_sparql_client()
+
+    formatted_keywords = []
+    for kw in keywords:
+        if kw.startswith("http://") or kw.startswith("https://"):
+            formatted_keywords.append(f"<{kw}>")
+        else:
+            formatted_keywords.append(Literal(kw).n3())
+    values_str = " ".join(formatted_keywords)
+
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        VALUES ?value {{ {values_str} }}
+        ?dataset a dcat:Dataset .
+        ?dataset dcat:keyword ?keyword .
+        ?keyword rdfs:label ?value
+    }}
+    """
+    try:
+        sparql.setQuery(query)
+        results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in several Keyword helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
 @app.get("/get_dataset_information_by_author_orcid")
 async def get_dataset_information_by_author_orcid(author_orcid: str = Query(...)):
@@ -635,16 +663,13 @@ async def get_dataset_information_by_several_author_orcid(request: AuthorOrcidRe
 @app.get("/get_dataset_information_by_author_name")
 async def get_dataset_information_by_author_name(author_name: str = Query(...)):
     try:
-        # 1. Split the incoming string by commas and clean up extra whitespace
         name_list = [name.strip() for name in author_name.split(",") if name.strip()]
 
-        # 2. Feed the list directly into your existing bulk helper!
         data = get_dataset_information_by_several_author_name_helper(name_list)
 
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these names.")
 
-        # Return the data. We reflect the original string, but return the combined results
         return {"author_name": author_name, "results": data}
 
     except HTTPException:
@@ -854,6 +879,35 @@ async def get_dataset_information_by_several_dataset_ldm_id(request: DatasetLdmI
         logger.error("Error fetching multiple Dataset LDM IDs", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
+@app.get("/get_dataset_information_by_keyword")
+async def get_dataset_information_by_keyword(keyword: str = Query(...)):
+    try:
+        keyword_list = [kw.strip() for kw in keyword.split(",") if kw.strip()]
+        data = get_dataset_information_by_several_keyword_helper(keyword_list)
+
+        if not data:
+            raise HTTPException(status_code=404, detail="No datasets found for this keyword.")
+        return {"keyword": keyword, "results": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching by Keyword: {keyword}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal SPARQL Error")
+
+@app.post("/get_dataset_information_by_keyword")
+async def get_dataset_information_by_several_keyword(request: KeywordRequest):
+    if not request.keywords:
+        raise HTTPException(status_code=400, detail="List cannot be empty.")
+    try:
+        data = get_dataset_information_by_several_keyword_helper(request.keywords)
+        if not data:
+            raise HTTPException(status_code=404, detail="No datasets found for these Keywords.")
+        return {"requested_count": len(request.keywords), "found_count": len(data), "results": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error fetching multiple Keywords", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
