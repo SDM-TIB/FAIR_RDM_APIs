@@ -99,28 +99,41 @@ class KeywordRequest(BaseModel):
 class PublisherIdRequest(BaseModel):
     publisher_ids: List[str]
 
-# --- BULK HYDRATION ENGINE ---
+# --- BULK HYDRATION ENGINE (3-HOP) ---
 def _parse_o_node(o_node: dict) -> dict:
     inner_data = {"type": o_node['type'], "value": o_node['value']}
     if 'datatype' in o_node:
         inner_data['datatype'] = o_node['datatype']
     return inner_data
 
-def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict):
-    mapping = {
-        type_string: "type_set",
-        landing_page_string: "landing_page_set",
-        is_described_by_string: "is_described_by_set",
-        citation_string: "citation_set",
-        creator_string: "creator_set",
-        distribution_string: "distribution_set",
-        publisher_string: "publisher_set",
-        keyword_string: "keyword_set",
-    }
-    if p_val in mapping:
-        local_sets[ds_uri][mapping[p_val]].add(o_val)
+def _process_nested_row(row: dict, entity_name: str, grouped: dict):
+    entity_uri = row[entity_name]['value']
+    p_value = row['p']['value']
+    inner_data = _parse_o_node(row['o'])
+    grouped[entity_uri].setdefault(p_value, []).append(inner_data)
 
-def _process_bulk_row(row: dict, final_results: dict, local_sets: dict):
+def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict, global_sets: dict):
+    mapping = {
+        type_string: ("type_set", None),
+        landing_page_string: ("landing_page_set", None),
+        is_described_by_string: ("is_described_by_set", None),
+        citation_string: ("citation_set", None),
+        creator_string: ("creator_set", "creator"),
+        distribution_string: ("distribution_set", "distribution"),
+        publisher_string: ("publisher_set", "publisher"),
+        keyword_string: ("keyword_set", "keyword"),
+    }
+    if p_val not in mapping:
+        return
+
+    local_key, global_key = mapping[p_val]
+    local_sets[ds_uri][local_key].add(o_val)
+    
+    # Store URIs in global_sets for the 3rd hop
+    if global_key:
+        global_sets[global_key].add(o_val)
+
+def _process_bulk_row(row: dict, final_results: dict, local_sets: dict, global_sets: dict):
     ds_uri = row['dataset']['value']
     p_val = row['p']['value']
 
@@ -132,10 +145,40 @@ def _process_bulk_row(row: dict, final_results: dict, local_sets: dict):
         return
 
     o_val = row['o']['value']
-    _map_bulk_property(ds_uri, p_val, o_val, local_sets)
+    _map_bulk_property(ds_uri, p_val, o_val, local_sets, global_sets)
 
-def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict):
-    # Only map the raw URIs up to the 2nd hop
+def fetch_nested_entities(sparql: SPARQLWrapper, uri_set: set, entity_name: str) -> List[dict]:
+    if not uri_set:
+        return []
+
+    values_string = " ".join([f"<{uri}>" for uri in uri_set])
+    query = f"""
+    SELECT ?{entity_name} ?p ?o
+    WHERE {{
+      VALUES ?{entity_name} {{ {values_string} }}
+      ?{entity_name} ?p ?o .
+    }}
+    """
+    sparql.setQuery(query)
+
+    try:
+        query_result = sparql.query().convert()['results']['bindings']
+        grouped_entities = {uri: {} for uri in uri_set}
+
+        for row in query_result:
+            _process_nested_row(row, entity_name, grouped_entities)
+
+        json_list = []
+        for uri, properties in grouped_entities.items():
+            json_list.append({"uri": uri, "properties": properties})
+
+        return json_list
+    except Exception as e:
+        logger.error(f"Error in {entity_name} subquery", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"{entity_name} query error: {str(e)}")
+
+def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict, nested_data: dict):
+    # Non-nested fields
     if sets["type_set"]:
         final_results[ds_uri][type_string] = list(sets["type_set"])
     if sets["landing_page_set"]:
@@ -144,14 +187,21 @@ def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict):
         final_results[ds_uri][is_described_by_string] = list(sets["is_described_by_set"])
     if sets["citation_set"]:
         final_results[ds_uri][citation_string] = list(sets["citation_set"])
+
+    # Nested fields mapped from the 3rd hop results
+    creators = nested_data.get("creator", {})
+    dists = nested_data.get("distribution", {})
+    keys = nested_data.get("keyword", {})
+    pubs = nested_data.get("publisher", {})
+
     if sets["creator_set"]:
-        final_results[ds_uri][creator_string] = list(sets["creator_set"])
+        final_results[ds_uri][creator_string] = [creators[c] for c in sets["creator_set"] if c in creators]
     if sets["distribution_set"]:
-        final_results[ds_uri][distribution_string] = list(sets["distribution_set"])
+        final_results[ds_uri][distribution_string] = [dists[d] for d in sets["distribution_set"] if d in dists]
     if sets["keyword_set"]:
-        final_results[ds_uri][keyword_string] = list(sets["keyword_set"])
+        final_results[ds_uri][keyword_string] = [keys[k] for k in sets["keyword_set"] if k in keys]
     if sets["publisher_set"]:
-        final_results[ds_uri][publisher_string] = list(sets["publisher_set"])
+        final_results[ds_uri][publisher_string] = [pubs[p] for p in sets["publisher_set"] if p in pubs]
 
 def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
     if not dataset_uris:
@@ -165,7 +215,10 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
               "publisher_set": set()}
         for uri in dataset_uris
     }
+    
+    global_sets = {"creator": set(), "distribution": set(), "keyword": set(), "publisher": set()}
 
+    # Chunk the request to prevent MaxRows truncation limit errors on large limits (e.g., > 100 datasets)
     chunk_size = 100
     for i in range(0, len(dataset_uris), chunk_size):
         chunk = dataset_uris[i:i + chunk_size]
@@ -185,13 +238,21 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
         try:
             main_query_result = sparql.query().convert()['results']['bindings']
             for row in main_query_result:
-                _process_bulk_row(row, final_results, local_sets)
+                _process_bulk_row(row, final_results, local_sets, global_sets)
         except Exception as e:
             logger.error("Error in bulk main query", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Bulk main query error: {str(e)}")
 
+    # Execute the 3rd hop: Fetch full properties for nested entities
+    nested_data = {}
+    for entity in ["creator", "distribution", "keyword", "publisher"]:
+        if global_sets[entity]:
+            fetched = fetch_nested_entities(sparql, global_sets[entity], entity)
+            nested_data[entity] = {item['uri']: item for item in fetched}
+
+    # Reassemble all pieces
     for ds_uri, sets in local_sets.items():
-        _reassemble_dataset(ds_uri, sets, final_results)
+        _reassemble_dataset(ds_uri, sets, final_results, nested_data)
 
     return final_results
 
