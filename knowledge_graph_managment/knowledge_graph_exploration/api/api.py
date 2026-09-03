@@ -94,6 +94,9 @@ class DatasetLdmIdRequest(BaseModel):
 class KeywordRequest(BaseModel):
     keywords: List[str]
 
+class PublisherIdRequest(BaseModel):
+    publishe_ids: List[str]
+
 def _parse_o_node(o_node: dict) -> dict:
     inner_data = {"type": o_node['type'], "value": o_node['value']}
     if 'datatype' in o_node:
@@ -332,6 +335,33 @@ def get_dataset_information_by_author_ldm_id_helper(author_ldm_id: str):
 
 def get_dataset_information_by_author_name_helper(author_name: str):
     return get_dataset_information_by_several_author_name_helper([author_name])
+
+def get_dataset_information_by_publisher_helper(publisher_id: str, limit: int = 49, offset: int = 0):
+    sparql = get_sparql_client()
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        ?dataset a dcat:Dataset
+        ?dataset dct:publisher <{publisher_id}>
+    }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
+    """
+
+    try:
+        sparql.setQuery(query)
+        result = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set(row['dataset']['value'] for row in results))
+
+        if not dataset_uris:
+            return {}
+
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in Publisher helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
 def get_dataset_information_by_paper_doi_helper(paper_doi: str):
     sparql = get_sparql_client()
@@ -629,6 +659,33 @@ def get_dataset_information_by_several_keyword_helper(keywords: List[str]):
         logger.error("SPARQL Query Failed in several Keyword helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
+def get_dataset_information_by_several_publisher_helper(publisher_ids: List[str]):
+    if not publisher_ids:
+        return {}
+
+    sparql = get_sparql_client()
+
+    formatted_publishers = [f"<{pid}>" for pid in publisher_ids]
+    values_str = " ".join(formatted_publishers)
+
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        VALUES ?publisher {{ {values_str} }}
+        ?dataset a dcat:Dataset .
+        ?dataset dct:publisher ?publisher .
+    }}
+    """
+    try:
+        sparql.setQuery(query)
+        results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in several Publisher helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+
 @app.get("/get_dataset_information_by_author_orcid")
 async def get_dataset_information_by_author_orcid(author_orcid: str = Query(...)):
     try:
@@ -879,6 +936,9 @@ async def get_dataset_information_by_several_dataset_ldm_id(request: DatasetLdmI
         logger.error("Error fetching multiple Dataset LDM IDs", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
+
+# --- DATASET KEYWORD ENDPOINT---
+
 @app.get("/get_dataset_information_by_keyword")
 async def get_dataset_information_by_keyword(keyword: str = Query(...)):
     try:
@@ -907,6 +967,39 @@ async def get_dataset_information_by_several_keyword(request: KeywordRequest):
         raise
     except Exception as e:
         logger.error("Error fetching multiple Keywords", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal SPARQL Error")
+
+
+# --- DATASET PUBLISHER ENDPOINT---
+
+@app.get("/get_dataset_information_by_publisher")
+async def get_dataset_information_by_publisher(
+        publisher_id: str = Query(...),
+        limit: int = Query(49, ge=1, le=1000),
+        offset: int = Query(0, ge=0)
+):
+    try:
+        data = get_dataset_information_by_publisher_helper(publisher_id, limit, offset)
+        return {"publisher_id": publisher_id, "results": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching by Publisher ID: {publisher_id}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal SPARQL Error")
+
+@app.post("/get_dataset_information_by_publisher")
+async def get_dataset_information_by_several_publisher(request: PublisherIdRequest):
+    if not request.publisher_ids:
+        raise HTTPException(status_code=400, detail="List cannot be empty.")
+    try:
+        data = get_dataset_information_by_several_publisher_helper(request.publisher_ids)
+        if not data:
+            raise HTTPException(status_code=404, detail="No datasets found for these Publishers.")
+        return {"requested_count": len(request.publisher_ids), "found_count": len(data), "results": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error fetching multiple Publishers", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.get("/favicon.ico", include_in_schema=False)
