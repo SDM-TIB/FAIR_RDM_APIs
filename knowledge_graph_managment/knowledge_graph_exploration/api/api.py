@@ -67,6 +67,7 @@ is_described_by_string = 'http://purl.org/spar/datacite/isDescribedBy'
 citation_string = 'http://schema.org/citation'
 publisher_string = 'http://purl.org/dc/terms/publisher'
 
+# --- MODELS ---
 class AuthorNameRequest(BaseModel):
     author_names: List[str]
 
@@ -97,6 +98,7 @@ class KeywordRequest(BaseModel):
 class PublisherIdRequest(BaseModel):
     publisher_ids: List[str]
 
+# --- BULK HYDRATION ENGINE ---
 def _parse_o_node(o_node: dict) -> dict:
     inner_data = {"type": o_node['type'], "value": o_node['value']}
     if 'datatype' in o_node:
@@ -165,37 +167,6 @@ def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict, nested_dat
         final_results[ds_uri][keyword_string] = [keys[k] for k in sets["keyword_set"] if k in keys]
     if sets["publisher_set"]:
         final_results[ds_uri][publisher_string] = [pubs[p] for p in sets["publisher_set"] if p in pubs]
-
-def _parse_author_results(results: list) -> Tuple[set, set, set]:
-    author_uris, dataset_uris, same_as_uris = set(), set(), set()
-    for row in results:
-        if 'author' in row:
-            author_uris.add(row['author']['value'])
-        if 'dataset' in row:
-            dataset_uris.add(row['dataset']['value'])
-        if 'same_as' in row:
-            same_as_uris.add(row['same_as']['value'])
-    return author_uris, dataset_uris, same_as_uris
-
-def _inject_same_as(props: dict, orcid_data_map: dict):
-    if same_as_string not in props:
-        return props
-
-    nested_same_as_list = []
-    for raw_s_node in props[same_as_string]:
-        s_uri = raw_s_node["value"]
-        real_orcid_props = orcid_data_map.get(s_uri, {})
-
-        if type_string not in real_orcid_props:
-            real_orcid_props[type_string] = [{"type": "uri", "value": "http://purl.org/spar/pro/Author"}]
-
-        nested_same_as_list.append({"uri": s_uri, "properties": real_orcid_props})
-
-    props[same_as_string] = nested_same_as_list
-    return props
-
-
-# --- GRAPH TRAVERSAL HELPERS ---
 
 def fetch_nested_entities(sparql: SPARQLWrapper, uri_set: set, entity_name: str) -> List[dict]:
     if not uri_set:
@@ -275,13 +246,12 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
 
     return final_results
 
-def translate_orcids_to_ldm_ids(author_orcids: List[str]) -> List[str]:
-    if not author_orcids:
-        return []
 
+# --- RESOLUTION HELPERS ---
+def translate_orcids_to_ldm_ids(author_orcids: List[str]) -> List[str]:
+    if not author_orcids: return []
     sparql = get_sparql_client()
     values_str = " ".join([f"<{orcid}>" for orcid in author_orcids])
-
     query = f"""
     PREFIX pro: <http://purl.org/spar/pro/>
     PREFIX owl: <http://www.w3.org/2002/07/owl#>
@@ -301,12 +271,9 @@ def translate_orcids_to_ldm_ids(author_orcids: List[str]) -> List[str]:
         raise HTTPException(status_code=500, detail="Translation SPARQL Error")
 
 def translate_names_to_ldm_ids(author_names: List[str]) -> List[str]:
-    if not author_names:
-        return []
-
+    if not author_names: return []
     sparql = get_sparql_client()
     values_str = " ".join([Literal(name).n3() for name in author_names])
-
     query = f"""
     PREFIX pro: <http://purl.org/spar/pro/>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -325,179 +292,72 @@ def translate_names_to_ldm_ids(author_names: List[str]) -> List[str]:
         logger.error("Error translating Names to LDM IDs", exc_info=True)
         raise HTTPException(status_code=500, detail="Translation SPARQL Error")
 
-# --- GET HELPERS ---
+def _inject_same_as(props: dict, orcid_data_map: dict):
+    if same_as_string not in props:
+        return props
 
-def get_dataset_information_by_author_orcid_helper(author_orcid: str):
-    return get_dataset_information_by_several_author_orcid_helper([author_orcid])
+    nested_same_as_list = []
+    for raw_s_node in props[same_as_string]:
+        s_uri = raw_s_node["value"]
+        real_orcid_props = orcid_data_map.get(s_uri, {})
 
-def get_dataset_information_by_author_ldm_id_helper(author_ldm_id: str):
-    return get_dataset_information_by_several_author_ldm_id_helper([author_ldm_id])
+        if type_string not in real_orcid_props:
+            real_orcid_props[type_string] = [{"type": "uri", "value": "http://purl.org/spar/pro/Author"}]
 
-def get_dataset_information_by_author_name_helper(author_name: str):
-    return get_dataset_information_by_several_author_name_helper([author_name])
+        nested_same_as_list.append({"uri": s_uri, "properties": real_orcid_props})
 
-def get_dataset_information_by_publisher_helper(publisher_id: str, limit: int = 49, offset: int = 0):
-    sparql = get_sparql_client()
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        ?dataset a dcat:Dataset .
-        ?dataset dct:publisher <{publisher_id}> .
-    }}
-    ORDER BY ?dataset
-    LIMIT {limit}
-    OFFSET {offset}
-    """
-
-    try:
-        sparql.setQuery(query)
-        result = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set(row['dataset']['value'] for row in results))
-
-        if not dataset_uris:
-            return {}
-
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in Publisher helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_paper_doi_helper(paper_doi: str):
-    sparql = get_sparql_client()
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        BIND (<{paper_doi}> as ?is_described_by)
-        ?dataset a dcat:Dataset .
-        ?dataset datacite:isDescribedBy ?is_described_by .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in several Dataset DOI helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+    props[same_as_string] = nested_same_as_list
+    return props
 
 
-def get_dataset_information_by_paper_title_helper(paper_title: str):
-    sparql = get_sparql_client()
-    safe_title = Literal(paper_title).n3()
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        ?paper a orgk:Paper .
-        ?paper rdfs:label {safe_title} .
-        ?dataset a dcat:Dataset .
-        ?dataset datacite:isDescribedBy ?paper .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in Paper Title helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+# --- PAGINATED FETCH HELPERS ---
 
-def get_dataset_information_by_dataset_doi_helper(dataset_doi: str):
-    sparql = get_sparql_client()
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        BIND (<{dataset_doi}> as ?source)
-        ?dataset a dcat:Dataset .
-        ?dataset dct:source ?source .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in several Dataset DOI helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_dataset_title_helper(dataset_title: str):
-    sparql = get_sparql_client()
-    safe_title = Literal(dataset_title).n3()
-    query = f"""
-    PREFIX dcat: <http://www.w3.org/ns/dcat#>
-    PREFIX dct:  <http://purl.org/dc/terms/>
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        ?dataset a dcat:Dataset .
-        ?dataset dct:title {safe_title} .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = [row['dataset']['value'] for row in results]
-
-        final_results = {}
-        for uri in dataset_uris:
-            final_results[uri] = get_dataset_information_by_dataset_ldm_id_helper(uri)
-
-        return final_results
-    except Exception as e:
-        logger.error("SPARQL Query Failed in Dataset Title helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_dataset_ldm_id_helper(dataset_ldm_id: str):
-    bulk_result = get_bulk_dataset_information_helper([dataset_ldm_id])
-    return bulk_result.get(dataset_ldm_id, {})
-
-
-# --- POST HELPERS ---
-
-def get_dataset_information_by_several_author_orcid_helper(author_orcids: List[str]):
-    ldm_ids = translate_orcids_to_ldm_ids(author_orcids)
-    if not ldm_ids:
-        return {}
-    return get_dataset_information_by_several_author_ldm_id_helper(ldm_ids)
-
-def get_dataset_information_by_several_author_name_helper(author_names: List[str]):
-    ldm_ids = translate_names_to_ldm_ids(author_names)
-    if not ldm_ids:
-        return {}
-    return get_dataset_information_by_several_author_ldm_id_helper(ldm_ids)
-
-def get_dataset_information_by_several_author_ldm_id_helper(author_ldm_ids: List[str]):
+def get_dataset_information_by_several_author_ldm_id_paginated_helper(author_ldm_ids: List[str], limit: int = 49, offset: int = 0):
     if not author_ldm_ids:
         return {}
 
     sparql = get_sparql_client()
     values_str = " ".join([f"<{uri}>" for uri in author_ldm_ids])
 
-    query = f"""
+    # 1. Fetch paginated datasets
+    query_ds = f"""
     {prefixes}
-    SELECT DISTINCT ?author ?dataset ?same_as
-    WHERE {{
+    SELECT DISTINCT ?dataset WHERE {{
         VALUES ?author {{ {values_str} }}
-        ?author a pro:Author .
-        OPTIONAL {{ ?dataset dct:creator ?author . }}
-        OPTIONAL {{ ?author <http://www.w3.org/2002/07/owl#sameAS> ?same_as . }}
+        ?dataset a dcat:Dataset .
+        ?dataset dct:creator ?author .
     }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
     """
-
     try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
+        sparql.setQuery(query_ds)
+        ds_results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([r['dataset']['value'] for r in ds_results]))
 
-        author_uris, dataset_uris, same_as_uris = _parse_author_results(results)
         final_results = {}
-
         if dataset_uris:
-            final_results.update(get_bulk_dataset_information_helper(list(dataset_uris)))
+            final_results.update(get_bulk_dataset_information_helper(dataset_uris))
+
+        # 2. Fetch Author Node Properties (even if 0 datasets returned)
+        query_author = f"""
+        {prefixes}
+        SELECT DISTINCT ?author ?same_as WHERE {{
+            VALUES ?author {{ {values_str} }}
+            ?author a pro:Author .
+            OPTIONAL {{ ?author owl:sameAS ?same_as . }}
+        }}
+        """
+        sparql.setQuery(query_author)
+        author_results = sparql.query().convert()['results']['bindings']
+
+        author_uris = set()
+        same_as_uris = set()
+        for row in author_results:
+            author_uris.add(row['author']['value'])
+            if 'same_as' in row:
+                same_as_uris.add(row['same_as']['value'])
 
         orcid_data_map = {}
         if same_as_uris:
@@ -517,121 +377,46 @@ def get_dataset_information_by_several_author_ldm_id_helper(author_ldm_ids: List
 
         return final_results
     except Exception as e:
-        logger.error("SPARQL Query Failed in author LDM ID helper", exc_info=True)
+        logger.error("SPARQL Query Failed in Paginated Author helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-def get_dataset_information_by_several_paper_doi_helper(paper_dois: List[str]):
-    if not paper_dois:
+def get_dataset_information_by_several_publisher_paginated_helper(publisher_ids: List[str], limit: int = 49, offset: int = 0):
+    if not publisher_ids:
         return {}
+
     sparql = get_sparql_client()
-    clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in paper_dois]
-    values_str = " ".join([f"<{doi}>" for doi in clean_dois])
+    formatted_publishers = [f"<{pid}>" for pid in publisher_ids]
+    values_str = " ".join(formatted_publishers)
 
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
     WHERE {{
-        VALUES ?is_described_by {{ {values_str} }}
+        VALUES ?publisher {{ {values_str} }}
         ?dataset a dcat:Dataset .
-        ?dataset datacite:isDescribedBy ?is_described_by .
+        ?dataset dct:publisher ?publisher .
     }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
     """
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(set([row['dataset']['value'] for row in results]))
+
+        if not dataset_uris:
+            return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
-        logger.error("SPARQL Query Failed in Paper DOI helper", exc_info=True)
+        logger.error("SPARQL Query Failed in Paginated Publisher helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-def get_dataset_information_by_several_paper_title_helper(paper_titles: List[str]):
-    if not paper_titles:
-        return {}
-
-    sparql = get_sparql_client()
-    values_str = " ".join([Literal(title).n3() for title in paper_titles])
-
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        VALUES ?title {{ {values_str} }}
-        ?paper a orgk:Paper .
-        ?paper rdfs:label ?title .
-        ?dataset a dcat:Dataset .
-        ?dataset datacite:isDescribedBy ?paper .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in several Paper Title helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_several_dataset_doi_helper(dataset_dois: List[str]):
-    if not dataset_dois:
-        return {}
-    sparql = get_sparql_client()
-    clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in dataset_dois]
-    values_str = " ".join([f"<{doi}>" for doi in clean_dois])
-
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        VALUES ?source {{ {values_str} }}
-        ?dataset a dcat:Dataset .
-        ?dataset dct:source ?source .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in Dataset DOI helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_several_dataset_title_helper(dataset_titles: List[str]):
-    if not dataset_titles:
-        return {}
-    sparql = get_sparql_client()
-    values_str = " ".join([Literal(title).n3() for title in dataset_titles])
-
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT ?dataset
-    WHERE {{
-        VALUES ?title {{ {values_str} }}
-        ?dataset a dcat:Dataset .
-        ?dataset dct:title ?title .
-    }}
-    """
-    try:
-        sparql.setQuery(query)
-        results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
-        return get_bulk_dataset_information_helper(dataset_uris)
-    except Exception as e:
-        logger.error("SPARQL Query Failed in Dataset Title helper", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
-
-def get_dataset_information_by_several_dataset_ldm_id_helper(dataset_ldm_ids: List[str]):
-    if not dataset_ldm_ids:
-        return {}
-    return get_bulk_dataset_information_helper(dataset_ldm_ids)
-
-def get_dataset_information_by_several_keyword_helper(keywords: List[str]):
+def get_dataset_information_by_several_keyword_paginated_helper(keywords: List[str], limit: int = 49, offset: int = 0):
     if not keywords:
         return {}
 
     sparql = get_sparql_client()
-
     formatted_keywords = []
     for kw in keywords:
         if kw.startswith("http://") or kw.startswith("https://"):
@@ -647,49 +432,154 @@ def get_dataset_information_by_several_keyword_helper(keywords: List[str]):
         VALUES ?value {{ {values_str} }}
         ?dataset a dcat:Dataset .
         ?dataset dcat:keyword ?keyword .
-        ?keyword rdfs:label ?value
+        ?keyword rdfs:label ?value .
     }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
     """
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(set([row['dataset']['value'] for row in results]))
+
+        if not dataset_uris:
+            return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
-        logger.error("SPARQL Query Failed in several Keyword helper", exc_info=True)
+        logger.error("SPARQL Query Failed in Paginated Keyword helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-def get_dataset_information_by_several_publisher_helper(publisher_ids: List[str]):
-    if not publisher_ids:
-        return {}
-
+def get_dataset_information_by_several_paper_doi_paginated_helper(paper_dois: List[str], limit: int = 49, offset: int = 0):
+    if not paper_dois: return {}
     sparql = get_sparql_client()
-
-    formatted_publishers = [f"<{pid}>" for pid in publisher_ids]
-    values_str = " ".join(formatted_publishers)
+    clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in paper_dois]
+    values_str = " ".join([f"<{doi}>" for doi in clean_dois])
 
     query = f"""
     {prefixes}
     SELECT DISTINCT ?dataset
     WHERE {{
-        VALUES ?publisher {{ {values_str} }}
+        VALUES ?is_described_by {{ {values_str} }}
         ?dataset a dcat:Dataset .
-        ?dataset dct:publisher ?publisher .
+        ?dataset datacite:isDescribedBy ?is_described_by .
     }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
     """
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
-        logger.error("SPARQL Query Failed in several Publisher helper", exc_info=True)
+        logger.error("SPARQL Query Failed in Paginated Paper DOI helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
 
-@app.get("/get_dataset_information_by_author_orcid")
-async def get_dataset_information_by_author_orcid(author_orcid: str = Query(...)):
+def get_dataset_information_by_several_paper_title_paginated_helper(paper_titles: List[str], limit: int = 49, offset: int = 0):
+    if not paper_titles: return {}
+    sparql = get_sparql_client()
+    values_str = " ".join([Literal(title).n3() for title in paper_titles])
+
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        VALUES ?title {{ {values_str} }}
+        ?paper a orgk:Paper .
+        ?paper rdfs:label ?title .
+        ?dataset a dcat:Dataset .
+        ?dataset datacite:isDescribedBy ?paper .
+    }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
+    """
     try:
-        data = get_dataset_information_by_author_orcid_helper(author_orcid)
+        sparql.setQuery(query)
+        results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        if not dataset_uris: return {}
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in Paginated Paper Title helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+
+def get_dataset_information_by_several_dataset_doi_paginated_helper(dataset_dois: List[str], limit: int = 49, offset: int = 0):
+    if not dataset_dois: return {}
+    sparql = get_sparql_client()
+    clean_dois = [d if d.startswith("http") else f"https://doi.org/{d}" for d in dataset_dois]
+    values_str = " ".join([f"<{doi}>" for doi in clean_dois])
+
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        VALUES ?source {{ {values_str} }}
+        ?dataset a dcat:Dataset .
+        ?dataset dct:source ?source .
+    }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
+    """
+    try:
+        sparql.setQuery(query)
+        results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        if not dataset_uris: return {}
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in Paginated Dataset DOI helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+
+def get_dataset_information_by_several_dataset_title_paginated_helper(dataset_titles: List[str], limit: int = 49, offset: int = 0):
+    if not dataset_titles: return {}
+    sparql = get_sparql_client()
+    values_str = " ".join([Literal(title).n3() for title in dataset_titles])
+
+    query = f"""
+    {prefixes}
+    SELECT DISTINCT ?dataset
+    WHERE {{
+        VALUES ?title {{ {values_str} }}
+        ?dataset a dcat:Dataset .
+        ?dataset dct:title ?title .
+    }}
+    ORDER BY ?dataset
+    LIMIT {limit}
+    OFFSET {offset}
+    """
+    try:
+        sparql.setQuery(query)
+        results = sparql.query().convert()['results']['bindings']
+        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        if not dataset_uris: return {}
+        return get_bulk_dataset_information_helper(dataset_uris)
+    except Exception as e:
+        logger.error("SPARQL Query Failed in Paginated Dataset Title helper", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
+
+def get_dataset_information_by_several_dataset_ldm_id_paginated_helper(dataset_ldm_ids: List[str], limit: int = 49, offset: int = 0):
+    if not dataset_ldm_ids: return {}
+    sliced_ids = dataset_ldm_ids[offset:offset+limit]
+    if not sliced_ids: return {}
+    return get_bulk_dataset_information_helper(sliced_ids)
+
+
+# --- AUTHOR ENDPOINTS ---
+
+@app.get("/get_dataset_information_by_author_orcid")
+async def get_dataset_information_by_author_orcid(
+    author_orcid: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
+    try:
+        ldm_ids = translate_orcids_to_ldm_ids([author_orcid])
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper(ldm_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this ORCID.")
         return {"author_orcid": author_orcid, "results": data}
@@ -700,11 +590,16 @@ async def get_dataset_information_by_author_orcid(author_orcid: str = Query(...)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_author_orcid")
-async def get_dataset_information_by_several_author_orcid(request: AuthorOrcidRequest):
+async def get_dataset_information_by_several_author_orcid(
+    request: AuthorOrcidRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.author_orcids:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_author_orcid_helper(request.author_orcids)
+        ldm_ids = translate_orcids_to_ldm_ids(request.author_orcids)
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper(ldm_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these ORCIDs.")
         return {"requested_count": len(request.author_orcids), "found_count": len(data), "results": data}
@@ -715,20 +610,20 @@ async def get_dataset_information_by_several_author_orcid(request: AuthorOrcidRe
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- AUTHOR NAME ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_author_name")
-async def get_dataset_information_by_author_name(author_name: str = Query(...)):
+async def get_dataset_information_by_author_name(
+    author_name: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
         name_list = [name.strip() for name in author_name.split(",") if name.strip()]
-
-        data = get_dataset_information_by_several_author_name_helper(name_list)
+        ldm_ids = translate_names_to_ldm_ids(name_list)
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper(ldm_ids, limit, offset)
 
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these names.")
-
         return {"author_name": author_name, "results": data}
-
     except HTTPException:
         raise
     except Exception as e:
@@ -736,11 +631,16 @@ async def get_dataset_information_by_author_name(author_name: str = Query(...)):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_author_name")
-async def get_dataset_information_by_several_author_name(request: AuthorNameRequest):
+async def get_dataset_information_by_several_author_name(
+    request: AuthorNameRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.author_names:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_author_name_helper(request.author_names)
+        ldm_ids = translate_names_to_ldm_ids(request.author_names)
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper(ldm_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Names.")
         return {"requested_count": len(request.author_names), "found_count": len(data), "results": data}
@@ -751,12 +651,14 @@ async def get_dataset_information_by_several_author_name(request: AuthorNameRequ
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- AUTHOR LDM ID ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_author_ldm_id")
-async def get_dataset_information_by_author_ldm_id(author_ldm_id: str = Query(...)):
+async def get_dataset_information_by_author_ldm_id(
+    author_ldm_id: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_author_ldm_id_helper(author_ldm_id)
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper([author_ldm_id], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this LDM ID.")
         return {"author_ldm_id": author_ldm_id, "results": data}
@@ -767,11 +669,15 @@ async def get_dataset_information_by_author_ldm_id(author_ldm_id: str = Query(..
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_author_ldm_id")
-async def get_dataset_information_by_several_author_ldm_id(request: AuthorLdmIdRequest):
+async def get_dataset_information_by_several_author_ldm_id(
+    request: AuthorLdmIdRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.author_ldm_ids:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_author_ldm_id_helper(request.author_ldm_ids)
+        data = get_dataset_information_by_several_author_ldm_id_paginated_helper(request.author_ldm_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these LDM IDs.")
         return {"requested_count": len(request.author_ldm_ids), "found_count": len(data), "results": data}
@@ -782,12 +688,16 @@ async def get_dataset_information_by_several_author_ldm_id(request: AuthorLdmIdR
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- PAPER DOI ENDPOINTS ---
+# --- PAPER ENDPOINTS ---
 
 @app.get("/get_dataset_information_by_paper_doi")
-async def get_dataset_information_by_paper_doi(paper_doi: str = Query(...)):
+async def get_dataset_information_by_paper_doi(
+    paper_doi: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_paper_doi_helper(paper_doi)
+        data = get_dataset_information_by_several_paper_doi_paginated_helper([paper_doi], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this Paper DOI.")
         return {"paper_doi": paper_doi, "results": data}
@@ -798,11 +708,15 @@ async def get_dataset_information_by_paper_doi(paper_doi: str = Query(...)):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_paper_doi")
-async def get_dataset_information_by_several_by_paper_doi(request: PaperDoiRequest):
+async def get_dataset_information_by_several_by_paper_doi(
+    request: PaperDoiRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.paper_dois:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_paper_doi_helper(request.paper_dois)
+        data = get_dataset_information_by_several_paper_doi_paginated_helper(request.paper_dois, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Paper DOIs.")
         return {"requested_count": len(request.paper_dois), "found_count": len(data), "results": data}
@@ -812,13 +726,14 @@ async def get_dataset_information_by_several_by_paper_doi(request: PaperDoiReque
         logger.error("Error fetching multiple Paper DOIs", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
-
-# --- PAPER TITLE ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_paper_title")
-async def get_dataset_information_by_paper_title(paper_title: str = Query(...)):
+async def get_dataset_information_by_paper_title(
+    paper_title: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_paper_title_helper(paper_title)
+        data = get_dataset_information_by_several_paper_title_paginated_helper([paper_title], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this Paper Title.")
         return {"paper_title": paper_title, "results": data}
@@ -829,11 +744,15 @@ async def get_dataset_information_by_paper_title(paper_title: str = Query(...)):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_paper_title")
-async def get_dataset_information_by_several_paper_title(request: PaperTitleRequest):
+async def get_dataset_information_by_several_paper_title(
+    request: PaperTitleRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.paper_titles:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_paper_title_helper(request.paper_titles)
+        data = get_dataset_information_by_several_paper_title_paginated_helper(request.paper_titles, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Paper Titles.")
         return {"requested_count": len(request.paper_titles), "found_count": len(data), "results": data}
@@ -844,12 +763,16 @@ async def get_dataset_information_by_several_paper_title(request: PaperTitleRequ
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- DATASET DOI ENDPOINTS ---
+# --- DATASET ENDPOINTS ---
 
 @app.get("/get_dataset_information_by_dataset_doi")
-async def get_dataset_information_by_dataset_doi(dataset_doi: str = Query(...)):
+async def get_dataset_information_by_dataset_doi(
+    dataset_doi: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_dataset_doi_helper(dataset_doi)
+        data = get_dataset_information_by_several_dataset_doi_paginated_helper([dataset_doi], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this Dataset DOI.")
         return {"dataset_doi": dataset_doi, "results": data}
@@ -860,11 +783,15 @@ async def get_dataset_information_by_dataset_doi(dataset_doi: str = Query(...)):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_dataset_doi")
-async def get_dataset_information_by_several_dataset_doi(request: DatasetDoiRequest):
+async def get_dataset_information_by_several_dataset_doi(
+    request: DatasetDoiRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.dataset_dois:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_dataset_doi_helper(request.dataset_dois)
+        data = get_dataset_information_by_several_dataset_doi_paginated_helper(request.dataset_dois, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Dataset DOIs.")
         return {"requested_count": len(request.dataset_dois), "found_count": len(data), "results": data}
@@ -875,12 +802,14 @@ async def get_dataset_information_by_several_dataset_doi(request: DatasetDoiRequ
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- DATASET TITLE ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_dataset_title")
-async def get_dataset_information_by_dataset_title(dataset_title: str = Query(...)):
+async def get_dataset_information_by_dataset_title(
+    dataset_title: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_dataset_title_helper(dataset_title)
+        data = get_dataset_information_by_several_dataset_title_paginated_helper([dataset_title], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this Dataset Title.")
         return {"dataset_title": dataset_title, "results": data}
@@ -891,11 +820,15 @@ async def get_dataset_information_by_dataset_title(dataset_title: str = Query(..
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_dataset_title")
-async def get_dataset_information_by_several_dataset_title(request: DatasetTitleRequest):
+async def get_dataset_information_by_several_dataset_title(
+    request: DatasetTitleRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.dataset_titles:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_dataset_title_helper(request.dataset_titles)
+        data = get_dataset_information_by_several_dataset_title_paginated_helper(request.dataset_titles, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Dataset Titles.")
         return {"requested_count": len(request.dataset_titles), "found_count": len(data), "results": data}
@@ -906,15 +839,17 @@ async def get_dataset_information_by_several_dataset_title(request: DatasetTitle
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- DATASET LDM ID ENDPOINTS ---
-
 @app.get("/get_dataset_information_by_dataset_ldm_id")
-async def get_dataset_information_by_dataset_ldm_id(dataset_ldm_id: str = Query(...)):
+async def get_dataset_information_by_dataset_ldm_id(
+    dataset_ldm_id: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
-        data = get_dataset_information_by_dataset_ldm_id_helper(dataset_ldm_id)
+        data = get_dataset_information_by_several_dataset_ldm_id_paginated_helper([dataset_ldm_id], limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this Dataset LDM ID.")
-        return {"dataset_ldm_id": dataset_ldm_id, "results": {dataset_ldm_id: data}}
+        return {"dataset_ldm_id": dataset_ldm_id, "results": data}
     except HTTPException:
         raise
     except Exception as e:
@@ -922,11 +857,15 @@ async def get_dataset_information_by_dataset_ldm_id(dataset_ldm_id: str = Query(
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_dataset_ldm_id")
-async def get_dataset_information_by_several_dataset_ldm_id(request: DatasetLdmIdRequest):
+async def get_dataset_information_by_several_dataset_ldm_id(
+    request: DatasetLdmIdRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.dataset_ldm_ids:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_dataset_ldm_id_helper(request.dataset_ldm_ids)
+        data = get_dataset_information_by_several_dataset_ldm_id_paginated_helper(request.dataset_ldm_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Dataset LDM IDs.")
         return {"requested_count": len(request.dataset_ldm_ids), "found_count": len(data), "results": data}
@@ -937,13 +876,17 @@ async def get_dataset_information_by_several_dataset_ldm_id(request: DatasetLdmI
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- DATASET KEYWORD ENDPOINT---
+# --- KEYWORD ENDPOINTS ---
 
 @app.get("/get_dataset_information_by_keyword")
-async def get_dataset_information_by_keyword(keyword: str = Query(...)):
+async def get_dataset_information_by_keyword(
+    keyword: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
     try:
         keyword_list = [kw.strip() for kw in keyword.split(",") if kw.strip()]
-        data = get_dataset_information_by_several_keyword_helper(keyword_list)
+        data = get_dataset_information_by_several_keyword_paginated_helper(keyword_list, limit, offset)
 
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for this keyword.")
@@ -955,11 +898,15 @@ async def get_dataset_information_by_keyword(keyword: str = Query(...)):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_keyword")
-async def get_dataset_information_by_several_keyword(request: KeywordRequest):
+async def get_dataset_information_by_several_keyword(
+    request: KeywordRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.keywords:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_keyword_helper(request.keywords)
+        data = get_dataset_information_by_several_keyword_paginated_helper(request.keywords, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Keywords.")
         return {"requested_count": len(request.keywords), "found_count": len(data), "results": data}
@@ -970,16 +917,18 @@ async def get_dataset_information_by_several_keyword(request: KeywordRequest):
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 
-# --- DATASET PUBLISHER ENDPOINT---
+# --- PUBLISHER ENDPOINTS ---
 
 @app.get("/get_dataset_information_by_publisher")
 async def get_dataset_information_by_publisher(
-        publisher_id: str = Query(...),
-        limit: int = Query(49, ge=1, le=1000),
-        offset: int = Query(0, ge=0)
+    publisher_id: str = Query(...),
+    limit: int = Query(49, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
 ):
     try:
-        data = get_dataset_information_by_publisher_helper(publisher_id, limit, offset)
+        data = get_dataset_information_by_several_publisher_paginated_helper([publisher_id], limit, offset)
+        if not data:
+            raise HTTPException(status_code=404, detail="No datasets found for this Publisher ID.")
         return {"publisher_id": publisher_id, "results": data}
     except HTTPException:
         raise
@@ -988,11 +937,15 @@ async def get_dataset_information_by_publisher(
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
 @app.post("/get_dataset_information_by_publisher")
-async def get_dataset_information_by_several_publisher(request: PublisherIdRequest):
+async def get_dataset_information_by_several_publisher(
+    request: PublisherIdRequest,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     if not request.publisher_ids:
         raise HTTPException(status_code=400, detail="List cannot be empty.")
     try:
-        data = get_dataset_information_by_several_publisher_helper(request.publisher_ids)
+        data = get_dataset_information_by_several_publisher_paginated_helper(request.publisher_ids, limit, offset)
         if not data:
             raise HTTPException(status_code=404, detail="No datasets found for these Publishers.")
         return {"requested_count": len(request.publisher_ids), "found_count": len(data), "results": data}
@@ -1001,6 +954,7 @@ async def get_dataset_information_by_several_publisher(request: PublisherIdReque
     except Exception as e:
         logger.error("Error fetching multiple Publishers", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
+
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
