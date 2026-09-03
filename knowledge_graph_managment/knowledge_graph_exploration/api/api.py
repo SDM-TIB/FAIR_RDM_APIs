@@ -4,7 +4,8 @@ import os
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Tuple
+from typing import List
+
 from SPARQLWrapper import SPARQLWrapper, JSON, POST
 from rdflib import Literal
 
@@ -105,32 +106,21 @@ def _parse_o_node(o_node: dict) -> dict:
         inner_data['datatype'] = o_node['datatype']
     return inner_data
 
-def _process_nested_row(row: dict, entity_name: str, grouped: dict):
-    entity_uri = row[entity_name]['value']
-    p_value = row['p']['value']
-    inner_data = _parse_o_node(row['o'])
-    grouped[entity_uri].setdefault(p_value, []).append(inner_data)
-
-def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict, global_sets: dict):
+def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict):
     mapping = {
-        type_string: ("type_set", None),
-        landing_page_string: ("landing_page_set", None),
-        is_described_by_string: ("is_described_by_set", None),
-        citation_string: ("citation_set", None),
-        creator_string: ("creator_set", "creator"),
-        distribution_string: ("distribution_set", "distribution"),
-        publisher_string: ("publisher_set", "publisher"),
-        keyword_string: ("keyword_set", "keyword"),
+        type_string: "type_set",
+        landing_page_string: "landing_page_set",
+        is_described_by_string: "is_described_by_set",
+        citation_string: "citation_set",
+        creator_string: "creator_set",
+        distribution_string: "distribution_set",
+        publisher_string: "publisher_set",
+        keyword_string: "keyword_set",
     }
-    if p_val not in mapping:
-        return
+    if p_val in mapping:
+        local_sets[ds_uri][mapping[p_val]].add(o_val)
 
-    local_key, global_key = mapping[p_val]
-    local_sets[ds_uri][local_key].add(o_val)
-    if global_key:
-        global_sets[global_key].add(o_val)
-
-def _process_bulk_row(row: dict, final_results: dict, local_sets: dict, global_sets: dict):
+def _process_bulk_row(row: dict, final_results: dict, local_sets: dict):
     ds_uri = row['dataset']['value']
     p_val = row['p']['value']
 
@@ -142,9 +132,10 @@ def _process_bulk_row(row: dict, final_results: dict, local_sets: dict, global_s
         return
 
     o_val = row['o']['value']
-    _map_bulk_property(ds_uri, p_val, o_val, local_sets, global_sets)
+    _map_bulk_property(ds_uri, p_val, o_val, local_sets)
 
-def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict, nested_data: dict):
+def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict):
+    # Only map the raw URIs up to the 2nd hop
     if sets["type_set"]:
         final_results[ds_uri][type_string] = list(sets["type_set"])
     if sets["landing_page_set"]:
@@ -153,75 +144,20 @@ def _reassemble_dataset(ds_uri: str, sets: dict, final_results: dict, nested_dat
         final_results[ds_uri][is_described_by_string] = list(sets["is_described_by_set"])
     if sets["citation_set"]:
         final_results[ds_uri][citation_string] = list(sets["citation_set"])
-
-    creators = nested_data.get("creator", {})
-    dists = nested_data.get("distribution", {})
-    keys = nested_data.get("keyword", {})
-    pubs = nested_data.get("publisher", {})
-
     if sets["creator_set"]:
-        final_results[ds_uri][creator_string] = [creators[c] for c in sets["creator_set"] if c in creators]
+        final_results[ds_uri][creator_string] = list(sets["creator_set"])
     if sets["distribution_set"]:
-        final_results[ds_uri][distribution_string] = [dists[d] for d in sets["distribution_set"] if d in dists]
+        final_results[ds_uri][distribution_string] = list(sets["distribution_set"])
     if sets["keyword_set"]:
-        final_results[ds_uri][keyword_string] = [keys[k] for k in sets["keyword_set"] if k in keys]
+        final_results[ds_uri][keyword_string] = list(sets["keyword_set"])
     if sets["publisher_set"]:
-        final_results[ds_uri][publisher_string] = [pubs[p] for p in sets["publisher_set"] if p in pubs]
-
-def fetch_nested_entities(sparql: SPARQLWrapper, uri_set: set, entity_name: str) -> List[dict]:
-    if not uri_set:
-        return []
-
-    values_string = " ".join([f"<{uri}>" for uri in uri_set])
-    query = f"""
-    SELECT ?{entity_name} ?p ?o
-    WHERE {{
-      VALUES ?{entity_name} {{ {values_string} }}
-      ?{entity_name} ?p ?o .
-    }}
-    """
-    sparql.setQuery(query)
-
-    try:
-        query_result = sparql.query().convert()['results']['bindings']
-        grouped_entities = {uri: {} for uri in uri_set}
-
-        for row in query_result:
-            _process_nested_row(row, entity_name, grouped_entities)
-
-        json_list = []
-        for uri, properties in grouped_entities.items():
-            json_list.append({"uri": uri, "properties": properties})
-
-        return json_list
-    except Exception as e:
-        logger.error(f"Error in {entity_name} subquery", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"{entity_name} query error: {str(e)}")
+        final_results[ds_uri][publisher_string] = list(sets["publisher_set"])
 
 def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
     if not dataset_uris:
         return {}
 
     sparql = get_sparql_client()
-    values_string = " ".join([f"<{uri}>" for uri in dataset_uris])
-
-    query = f"""
-    {prefixes}
-    SELECT DISTINCT
-        ?dataset ?p ?o
-    WHERE {{
-        VALUES ?dataset {{ {values_string} }}
-        ?dataset ?p ?o .
-    }}
-    """
-
-    sparql.setQuery(query)
-    try:
-        main_query_result = sparql.query().convert()['results']['bindings']
-    except Exception as e:
-        logger.error("Error in bulk main query", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Bulk main query error: {str(e)}")
-
     final_results = {uri: {} for uri in dataset_uris}
     local_sets = {
         uri: {"type_set": set(), "landing_page_set": set(), "is_described_by_set": set(),
@@ -230,19 +166,32 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
         for uri in dataset_uris
     }
 
-    global_sets = {"creator": set(), "distribution": set(), "keyword": set(), "publisher": set()}
+    chunk_size = 100
+    for i in range(0, len(dataset_uris), chunk_size):
+        chunk = dataset_uris[i:i + chunk_size]
+        values_string = " ".join([f"<{uri}>" for uri in chunk])
 
-    for row in main_query_result:
-        _process_bulk_row(row, final_results, local_sets, global_sets)
+        query = f"""
+        {prefixes}
+        SELECT DISTINCT
+            ?dataset ?p ?o
+        WHERE {{
+            VALUES ?dataset {{ {values_string} }}
+            ?dataset ?p ?o .
+        }}
+        """
 
-    nested_data = {}
-    for entity in ["creator", "distribution", "keyword", "publisher"]:
-        if global_sets[entity]:
-            fetched = fetch_nested_entities(sparql, global_sets[entity], entity)
-            nested_data[entity] = {item['uri']: item for item in fetched}
+        sparql.setQuery(query)
+        try:
+            main_query_result = sparql.query().convert()['results']['bindings']
+            for row in main_query_result:
+                _process_bulk_row(row, final_results, local_sets)
+        except Exception as e:
+            logger.error("Error in bulk main query", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Bulk main query error: {str(e)}")
 
     for ds_uri, sets in local_sets.items():
-        _reassemble_dataset(ds_uri, sets, final_results, nested_data)
+        _reassemble_dataset(ds_uri, sets, final_results)
 
     return final_results
 
@@ -265,7 +214,7 @@ def translate_orcids_to_ldm_ids(author_orcids: List[str]) -> List[str]:
     sparql.setQuery(query)
     try:
         results = sparql.query().convert()['results']['bindings']
-        return list(set(row['author']['value'] for row in results if 'author' in row))
+        return list(dict.fromkeys(row['author']['value'] for row in results if 'author' in row))
     except Exception as e:
         logger.error("Error translating ORCIDs to LDM IDs", exc_info=True)
         raise HTTPException(status_code=500, detail="Translation SPARQL Error")
@@ -287,28 +236,10 @@ def translate_names_to_ldm_ids(author_names: List[str]) -> List[str]:
     sparql.setQuery(query)
     try:
         results = sparql.query().convert()['results']['bindings']
-        return list(set(row['author']['value'] for row in results if 'author' in row))
+        return list(dict.fromkeys(row['author']['value'] for row in results if 'author' in row))
     except Exception as e:
         logger.error("Error translating Names to LDM IDs", exc_info=True)
         raise HTTPException(status_code=500, detail="Translation SPARQL Error")
-
-def _inject_same_as(props: dict, orcid_data_map: dict):
-    if same_as_string not in props:
-        return props
-
-    nested_same_as_list = []
-    for raw_s_node in props[same_as_string]:
-        s_uri = raw_s_node["value"]
-        real_orcid_props = orcid_data_map.get(s_uri, {})
-
-        if type_string not in real_orcid_props:
-            real_orcid_props[type_string] = [{"type": "uri", "value": "http://purl.org/spar/pro/Author"}]
-
-        nested_same_as_list.append({"uri": s_uri, "properties": real_orcid_props})
-
-    props[same_as_string] = nested_same_as_list
-    return props
-
 
 # --- PAGINATED FETCH HELPERS ---
 
@@ -319,7 +250,6 @@ def get_dataset_information_by_several_author_ldm_id_paginated_helper(author_ldm
     sparql = get_sparql_client()
     values_str = " ".join([f"<{uri}>" for uri in author_ldm_ids])
 
-    # 1. Fetch paginated datasets
     query_ds = f"""
     {prefixes}
     SELECT DISTINCT ?dataset WHERE {{
@@ -334,48 +264,12 @@ def get_dataset_information_by_several_author_ldm_id_paginated_helper(author_ldm
     try:
         sparql.setQuery(query_ds)
         ds_results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([r['dataset']['value'] for r in ds_results]))
+        dataset_uris = list(dict.fromkeys([r['dataset']['value'] for r in ds_results]))
 
-        final_results = {}
-        if dataset_uris:
-            final_results.update(get_bulk_dataset_information_helper(dataset_uris))
-
-        # 2. Fetch Author Node Properties (even if 0 datasets returned)
-        query_author = f"""
-        {prefixes}
-        SELECT DISTINCT ?author ?same_as WHERE {{
-            VALUES ?author {{ {values_str} }}
-            ?author a pro:Author .
-            OPTIONAL {{ ?author owl:sameAS ?same_as . }}
-        }}
-        """
-        sparql.setQuery(query_author)
-        author_results = sparql.query().convert()['results']['bindings']
-
-        author_uris = set()
-        same_as_uris = set()
-        for row in author_results:
-            author_uris.add(row['author']['value'])
-            if 'same_as' in row:
-                same_as_uris.add(row['same_as']['value'])
-
-        orcid_data_map = {}
-        if same_as_uris:
-            same_as_props = fetch_nested_entities(sparql, same_as_uris, "same_as_entity")
-            for item_data in same_as_props:
-                item_uri = item_data["uri"]
-                item_props = item_data["properties"]
-                orcid_data_map[item_uri] = item_props
-                final_results[item_uri] = item_props
-
-        if author_uris:
-            author_props = fetch_nested_entities(sparql, author_uris, "author")
-            for author_data in author_props:
-                author_uri = author_data["uri"]
-                props = _inject_same_as(author_data["properties"], orcid_data_map)
-                final_results[author_uri] = props
-
-        return final_results
+        if not dataset_uris:
+            return {}
+            
+        return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
         logger.error("SPARQL Query Failed in Paginated Author helper", exc_info=True)
         raise HTTPException(status_code=500, detail=f"SPARQL Error: {str(e)}")
@@ -403,7 +297,7 @@ def get_dataset_information_by_several_publisher_paginated_helper(publisher_ids:
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
 
         if not dataset_uris:
             return {}
@@ -441,7 +335,7 @@ def get_dataset_information_by_several_keyword_paginated_helper(keywords: List[s
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
 
         if not dataset_uris:
             return {}
@@ -471,7 +365,8 @@ def get_dataset_information_by_several_paper_doi_paginated_helper(paper_dois: Li
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
+        
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -500,7 +395,8 @@ def get_dataset_information_by_several_paper_title_paginated_helper(paper_titles
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
+        
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -528,7 +424,8 @@ def get_dataset_information_by_several_dataset_doi_paginated_helper(dataset_dois
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
+        
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -555,7 +452,8 @@ def get_dataset_information_by_several_dataset_title_paginated_helper(dataset_ti
     try:
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
-        dataset_uris = list(set([row['dataset']['value'] for row in results]))
+        dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
+        
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -743,7 +641,7 @@ async def get_dataset_information_by_paper_title(
         logger.error(f"Error fetching by Paper Title: {paper_title}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal SPARQL Error")
 
-@app.post("/get_dataset_information_by_paper_title")
+@app.post("/get_dataset_information_by_several_paper_title")
 async def get_dataset_information_by_several_paper_title(
     request: PaperTitleRequest,
     limit: int = Query(1000, ge=1, le=5000),
