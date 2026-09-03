@@ -95,7 +95,7 @@ class KeywordRequest(BaseModel):
     keywords: List[str]
 
 class PublisherIdRequest(BaseModel):
-    publishe_ids: List[str]
+    publisher_ids: List[str]
 
 def _parse_o_node(o_node: dict) -> dict:
     inner_data = {"type": o_node['type'], "value": o_node['value']}
@@ -342,8 +342,8 @@ def get_dataset_information_by_publisher_helper(publisher_id: str, limit: int = 
     {prefixes}
     SELECT DISTINCT ?dataset
     WHERE {{
-        ?dataset a dcat:Dataset
-        ?dataset dct:publisher <{publisher_id}>
+        ?dataset a dcat:Dataset .
+        ?dataset dct:publisher <{publisher_id}> .
     }}
     ORDER BY ?dataset
     LIMIT {limit}
