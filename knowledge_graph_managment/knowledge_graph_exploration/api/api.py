@@ -128,7 +128,7 @@ def _map_bulk_property(ds_uri: str, p_val: str, o_val: str, local_sets: dict, gl
 
     local_key, global_key = mapping[p_val]
     local_sets[ds_uri][local_key].add(o_val)
-    
+
     # Store URIs in global_sets for the 3rd hop
     if global_key:
         global_sets[global_key].add(o_val)
@@ -147,16 +147,24 @@ def _process_bulk_row(row: dict, final_results: dict, local_sets: dict, global_s
     o_val = row['o']['value']
     _map_bulk_property(ds_uri, p_val, o_val, local_sets, global_sets)
 
-def fetch_nested_entities(sparql: SPARQLWrapper, uri_set: set, entity_name: str) -> List[dict]:
+def fetch_nested_entities(sparql: SPARQLWrapper, uri_set: set, entity_name: str, valid_dataset_uris: List[str] = None) -> List[dict]:
     if not uri_set:
         return []
 
     values_string = " ".join([f"<{uri}>" for uri in uri_set])
+
+    filter_clause = ""
+    if entity_name == "creator" and valid_dataset_uris:
+        valid_ds_str = ", ".join([f"<{uri}>" for uri in valid_dataset_uris])
+        filter_clause = f"FILTER (?p != pro:authorOf || ?o IN ({valid_ds_str}))"
+
     query = f"""
+    {prefixes}
     SELECT ?{entity_name} ?p ?o
     WHERE {{
       VALUES ?{entity_name} {{ {values_string} }}
       ?{entity_name} ?p ?o .
+      {filter_clause}
     }}
     """
     sparql.setQuery(query)
@@ -215,7 +223,7 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
               "publisher_set": set()}
         for uri in dataset_uris
     }
-    
+
     global_sets = {"creator": set(), "distribution": set(), "keyword": set(), "publisher": set()}
 
     # Chunk the request to prevent MaxRows truncation limit errors on large limits (e.g., > 100 datasets)
@@ -247,7 +255,7 @@ def get_bulk_dataset_information_helper(dataset_uris: List[str]) -> dict:
     nested_data = {}
     for entity in ["creator", "distribution", "keyword", "publisher"]:
         if global_sets[entity]:
-            fetched = fetch_nested_entities(sparql, global_sets[entity], entity)
+            fetched = fetch_nested_entities(sparql, global_sets[entity], entity, dataset_uris)
             nested_data[entity] = {item['uri']: item for item in fetched}
 
     # Reassemble all pieces
@@ -329,7 +337,7 @@ def get_dataset_information_by_several_author_ldm_id_paginated_helper(author_ldm
 
         if not dataset_uris:
             return {}
-            
+
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
         logger.error("SPARQL Query Failed in Paginated Author helper", exc_info=True)
@@ -427,7 +435,7 @@ def get_dataset_information_by_several_paper_doi_paginated_helper(paper_dois: Li
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
-        
+
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -457,7 +465,7 @@ def get_dataset_information_by_several_paper_title_paginated_helper(paper_titles
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
-        
+
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -486,7 +494,7 @@ def get_dataset_information_by_several_dataset_doi_paginated_helper(dataset_dois
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
-        
+
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
@@ -514,7 +522,7 @@ def get_dataset_information_by_several_dataset_title_paginated_helper(dataset_ti
         sparql.setQuery(query)
         results = sparql.query().convert()['results']['bindings']
         dataset_uris = list(dict.fromkeys([row['dataset']['value'] for row in results]))
-        
+
         if not dataset_uris: return {}
         return get_bulk_dataset_information_helper(dataset_uris)
     except Exception as e:
