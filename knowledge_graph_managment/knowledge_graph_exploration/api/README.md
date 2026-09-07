@@ -134,10 +134,10 @@ Retrieve datasets published by specific organizations.
 | POST   | /get_dataset_information_by_publisher        | {"publisher_ids": ["<string>"]}        |
 
 Example GET Request (Publisher ID):
-curl -X GET "http://0.0.0.0:5742/get_dataset_information_by_publisher?publisher_id=https://research.tib.eu/ldm/Organization1"
+curl -X GET "http://0.0.0.0:5742/get_dataset_information_by_publisher?publisher_id=https://service.tib.eu/ldmservice/organization/8802f9f3-9760-48f5-95f9-a6b3e0565205"
 
 Example POST Request (Publisher ID):
-curl -X POST "http://0.0.0.0:5742/get_dataset_information_by_publisher" -H "Content-Type: application/json" -d '{"publisher_ids": ["https://research.tib.eu/ldm/Organization1"]}'
+curl -X POST "http://0.0.0.0:5742/get_dataset_information_by_publisher" -H "Content-Type: application/json" -d '{"publisher_ids": ["https://service.tib.eu/ldmservice/organization/8802f9f3-9760-48f5-95f9-a6b3e0565205"]}'
 
 ---
 
