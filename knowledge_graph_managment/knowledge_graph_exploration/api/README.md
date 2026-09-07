@@ -12,6 +12,11 @@ The API requires Python and the following dependencies (as defined in `requireme
 *   `uvicorn`
 *   `SPARQLWrapper`
 
+The Api also need to read Enviroment Variables
+``` bash
+CKANEXT__KG_EXPLORATION__ENDPOINT=https://labs.tib.eu/sdm/ldm_kg/sparql
+```
+
 ### Installation
 Install the required packages using standard Python package management:
 ```sh
@@ -104,6 +109,35 @@ curl -X GET "http://0.0.0.0:5742/get_dataset_information_by_dataset_doi?dataset_
 ```sh
 curl -X POST "http://0.0.0.0:5742/get_dataset_information_by_dataset_ldm_id" -H "Content-Type: application/json" -d '{"dataset_ldm_ids": ["https://research.tib.eu/ldm/00023be0-7b88-4bed-9805-21259c5f2bc2", "https://research.tib.eu/ldm/00033075-0c3e-471a-a95a-f8cb52c221b5"]}'
 ```
+
+### Keyword Endpoints
+Retrieve datasets tagged with specific keywords.
+
+| Method | Endpoint                                     | Payload / Query Parameter              |
+| :---   | :---                                         | :---                                   |
+| GET    | /get_dataset_information_by_keyword          | ?keyword=<string>                      |
+| POST   | /get_dataset_information_by_keyword          | {"keywords": ["<string>"]}             |
+
+Example GET Request (Keyword):
+curl -X GET "http://0.0.0.0:5742/get_dataset_information_by_keyword?keyword=Knowledge%20Graph"
+
+Example POST Request (Keyword):
+curl -X POST "http://0.0.0.0:5742/get_dataset_information_by_keyword" -H "Content-Type: application/json" -d '{"keywords": ["FT", "cc"]}'
+
+
+### Publisher (Organization) Endpoints
+Retrieve datasets published by specific organizations.
+
+| Method | Endpoint                                     | Payload / Query Parameter              |
+| :---   | :---                                         | :---                                   |
+| GET    | /get_dataset_information_by_publisher        | ?publisher_id=<string>                 |
+| POST   | /get_dataset_information_by_publisher        | {"publisher_ids": ["<string>"]}        |
+
+Example GET Request (Publisher ID):
+curl -X GET "http://0.0.0.0:5742/get_dataset_information_by_publisher?publisher_id=https://research.tib.eu/ldm/Organization1"
+
+Example POST Request (Publisher ID):
+curl -X POST "http://0.0.0.0:5742/get_dataset_information_by_publisher" -H "Content-Type: application/json" -d '{"publisher_ids": ["https://research.tib.eu/ldm/Organization1"]}'
 
 ---
 
